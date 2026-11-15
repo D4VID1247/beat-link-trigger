@@ -12,7 +12,7 @@
   (:import [java.awt Color Font Graphics2D RenderingHints BasicStroke]
            [java.net Inet4Address NetworkInterface]
            [javax.swing JComponent JFrame JOptionPane Timer]
-           [org.deepsymmetry.beatlink DeviceUpdate VirtualCdj]
+           [org.deepsymmetry.beatlink DeviceFinder DeviceUpdate VirtualCdj]
            [org.deepsymmetry.beatlink.data MetadataFinder SearchableItem TimeFinder TrackMetadata
             WaveformDetail WaveformDetailComponent WaveformFinder WaveformPreviewComponent]))
 
@@ -20,6 +20,7 @@
   "The deck numbers shown in the window."
   [1 2])
 
+(def ^:private ^DeviceFinder device-finder (DeviceFinder/getInstance))
 (def ^:private ^VirtualCdj virtual-cdj (VirtualCdj/getInstance))
 (def ^:private ^MetadataFinder metadata-finder (MetadataFinder/getInstance))
 (def ^:private ^TimeFinder time-finder (TimeFinder/getInstance))
@@ -171,6 +172,18 @@
   [n]
   (if demo? (demo-state n) (live-state n)))
 
+(defn- players-visible?
+  "Checks whether we are online and can currently see the XDJ-AZ."
+  []
+  (boolean (and (util/online?) (seq (.getCurrentDevices device-finder)))))
+
+(defn- ready?
+  "Checks whether we are online with the finders the waveform
+  components rely on already running, so that creating those
+  components cannot stall the window."
+  []
+  (and (util/online?) (.isRunning waveform-finder)))
+
 (defn- interface-count
   "Counts the network interfaces through which the XDJ-AZ is seen."
   []
@@ -185,6 +198,7 @@
 (def ^:private panel-grey (Color. 38 38 40))
 (def ^:private label-grey (Color. 165 165 170))
 (def ^:private link-green (Color. 60 210 90))
+(def ^:private offline-red (Color. 235 60 50))
 
 (defn- font
   "Builds the font we use at the given style and size."
@@ -349,7 +363,7 @@
    (fn []
      (let [w          (.getWidth c)
            h          (.getHeight c)
-           online?    (util/online?)
+           online?    (players-visible?)
            interfaces (if online? (interface-count) 0)
            link-bpm   (link-bpm)
            small      (font Font/BOLD 13)
@@ -376,7 +390,7 @@
                              right)
                      (status label-grey "ABLETON LINK" right))]
          (cond
-           (not online?)    (status label-grey "XDJ-AZ HORS LIGNE" right)
+           (not online?)    (status offline-red "ETHERNET" right)
            (> interfaces 1) (status master-orange "ETHERNET + USB" right)
            :else            (status link-green "ETHERNET" right)))))))
 
@@ -399,12 +413,12 @@
   and animated while they are shown, because drawing them is what
   keeps the computer busy."
   [quit-fn]
-  (let [online?  (util/online?)  ; The waveform components would stall the window while offline.
-        previews (mapv (fn [n]
-                         (if online?
-                           (WaveformPreviewComponent. (int n))
-                           (seesaw/canvas :background Color/BLACK :preferred-size [400 :by 60])))
+  (let [holders  (mapv (fn [_]  ; Each receives the whole-track waveform of its deck once we are online.
+                         (seesaw/border-panel
+                          :background Color/BLACK
+                          :center (seesaw/canvas :background Color/BLACK :preferred-size [400 :by 60])))
                        decks)
+        previews (atom nil)
         header   (seesaw/canvas :paint paint-header :preferred-size [1100 :by 40])
         scrolls  (seesaw/grid-panel :rows (count decks) :columns 1 :vgap 6 :background Color/BLACK
                                     :visible? false)
@@ -418,7 +432,7 @@
                                                     :background Color/BLACK
                                                     :center info
                                                     :south preview))
-                                                 infos previews))
+                                                 infos holders))
         content  (seesaw/border-panel :background Color/BLACK :vgap 8 :border 10
                                       :north header :center scrolls :south panels)
         ^JFrame root (seesaw/frame :title "XDJ-AZ Link" :on-close :nothing :content content)
@@ -430,13 +444,14 @@
         show     (fn [shown?]
                    (reset! waveforms-shown shown?)
                    (when (and shown? (nil? @details))
-                     (let [built (mapv (fn [n]
-                                         (if (util/online?)
+                     (let [ready (ready?)
+                           built (mapv (fn [n]
+                                         (if ready
                                            (doto (WaveformDetailComponent. (int n))
                                              (.setScale 1))
                                            (seesaw/canvas :background Color/BLACK)))
                                        decks)]
-                       (when (util/online?) (reset! details built))  ; Offline placeholders get rebuilt next time.
+                       (when ready (reset! details built))  ; Offline placeholders get rebuilt once we are online.
                        (seesaw/config! scrolls :items (mapv waveform-row decks built))))
                    (doseq [[n detail] (map vector decks @details)]
                      (when (instance? WaveformDetailComponent detail)
@@ -447,8 +462,17 @@
         painted  (atom nil)
         timer    (Timer. 66 (reify java.awt.event.ActionListener
                               (actionPerformed [_this _event]
+                                ;; As soon as we are online, bring in the waveforms that had to wait.
+                                (when (ready?)
+                                  (when (nil? @previews)
+                                    (reset! previews (mapv (fn [n] (WaveformPreviewComponent. (int n))) decks))
+                                    (doseq [[holder preview] (map vector holders @previews)]
+                                      (seesaw/config! holder :center preview))
+                                    (fit))
+                                  (when (and @waveforms-shown (nil? @details))
+                                    (show true)))
                                 ;; Only redraw when something we show has changed.
-                                (let [now [(mapv deck-state decks) (util/online?) (interface-count) (link-bpm)]]
+                                (let [now [(mapv deck-state decks) (players-visible?) (interface-count) (link-bpm)]]
                                   (when (not= now @painted)
                                     (reset! painted now)
                                     (.repaint ^JComponent header)

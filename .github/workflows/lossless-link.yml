@@ -62,6 +62,7 @@ jobs:
         jpackage --name "$app_name" --input Input --add-modules "$app_java_modules" \
                  --icon .github/resources/AZLink.icns --main-jar lossless-link.jar \
                  --description "PRO DJ LINK vers Ableton Link pour XDJ-AZ" \
+                 --java-options "'-Dapple.awt.application.name=XDJ-AZ Link'" \
                  --mac-package-identifier "ch.lossless.link" --app-version "$version" 2>&1 | tee -a "$RUNNER_TEMP/build.log"
         mv "$app_name-$version.dmg" "XDJ-AZ-Link-$version-Intel.dmg"
         gh release create "build-${{ github.run_number }}" "XDJ-AZ-Link-$version-Intel.dmg" Input/lossless-link.jar \

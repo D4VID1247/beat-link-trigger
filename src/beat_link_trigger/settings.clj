@@ -262,7 +262,8 @@
                    keyword
                    sanitize-startup-mode)]
       (when (not= :off mode)
-        (let [carabiner-frame (carabiner/show-window nil)]
+        (do
+          (carabiner/show-window nil)
           (carabiner/connect)
           (try
             (carabiner/sync-mode mode)
@@ -270,10 +271,7 @@
               (carabiner/sync-link (:carabiner-sync-link preferences true))
               (carabiner/align-bars (:carabiner-align-bar preferences true)))
             (catch Exception e
-              (timbre/error e "Carabiner sync from preferences failed.")
-              (seesaw/alert carabiner-frame (str "Unable to enter Carabiner sync mode chosen in Settings.\n"
-                                                 "Please see the logs for more details..")
-                            :title "Carabiner Sync Failed" :type :error))))))
+              (timbre/error e "Carabiner sync from preferences failed."))))))  ; No dialog in XDJ-AZ Link.
 
     (when (:playlist-write? preferences)
       (if (can-write-playlist? preferences)

@@ -1,8 +1,7 @@
 (ns beat-link-trigger.core
   "Top level organization for starting up the interface, logging, and
   managing online presence."
-  (:require [beat-link-trigger.about :as about]
-            [beat-link-trigger.help :as help]
+  (:require [beat-link-trigger.help :as help]
             [beat-link-trigger.logs :as logs]
             [beat-link-trigger.lossless :as lossless]
             [beat-link-trigger.menus :as menus]
@@ -16,7 +15,7 @@
             [clojure.string :as str]
             [seesaw.core :as seesaw]
             [taoensso.timbre :as timbre])
-  (:import [org.deepsymmetry.beatlink DeviceAnnouncement DeviceFinder VirtualCdj]))
+  (:import [org.deepsymmetry.beatlink DeviceFinder VirtualCdj]))
 
 (def ^DeviceFinder device-finder
   "A convenient reference to the [Beat Link
@@ -51,118 +50,42 @@
      (show/reopen-specified-shows show))
    (lossless/show-window triggers/quit)))  ; The only window XDJ-AZ Link shows.
 
-(defn- build-network-description
-  "Returns a string suitable for creating a `JLabel` describing the
-  current network configuration when we are having trouble finding DJ
-  Link devices."
-  []
-  (let [network (help/list-network-interfaces)]
-    #_(timbre/info "Failed going online. Found no DJ Link devices on network interfaces."
-                 (str/join "; " network))
-    (str "<html>No DJ Link devices were seen on any network, still looking.<br><br>"
-         "The following network interfaces were found:<br>"
-         (str/join "<br>" network) "<br>&nbsp;")))
-
 (defn try-going-online
-  "Search for a DJ link network, presenting a UI in the process. If
-  present, `options` holds the command-line options we were given at
-  application startup, to control which shows are opened."
+  "Search for the XDJ-AZ on the DJ Link network for as long as it takes,
+  without presenting any dialog: the main window is shown right away,
+  and reports whether the players can be seen. If present, `options`
+  holds the command-line options we were given at application startup,
+  to control which shows are opened."
   ([]
    (try-going-online nil))
   ([options]
-   (let [continue-offline (atom false)
-         quit             (atom false)
-         searching        (atom nil)  ; XDJ-AZ Link shows no splash screen while it looks for the players.
-         real-player?     (triggers/real-player?)
-         network-label    (seesaw/invoke-now (seesaw/label))]
-     (lossless/ensure-ethernet-only)  ; Keep DJ Link traffic off the USB cable before we start listening.
-     (try
-       (.start device-finder)  ; We are going to look for devices ourselves, so the user can interrupt us.
-       (catch java.net.BindException e
-         (timbre/error e "Unable to start Device Finder, is rekordbox or another instance running? Staying offline.")
-         (seesaw/invoke-now
-           (seesaw/alert (str "<html>Unable to search for devices, socket is in use.<br>"
-                              "Is rekordbox or another DJ Link program running?")
-                         :title "Failed to Go Online" :type :error)
-           (some-> @searching seesaw/dispose!)
-           (reset! quit true)))
-       (catch Throwable t
-         (timbre/error t "Problem starting Device Finder, staying offline.")
-         (seesaw/invoke-now
-           (seesaw/alert (str "<html>Unable to search for devices, check the log file for details.<br><br>" t)
-                         :title "Problem Trying to Go Online" :type :error)
-           (some-> @searching seesaw/dispose!)
-           (reset! quit true))))
+   (let [real-player? (triggers/real-player?)
+         last-problem (atom nil)]  ; So we only log a recurring problem once.
+     (lossless/show-window triggers/quit)  ; The only window XDJ-AZ Link shows, visible while we search.
+     (lossless/ensure-ethernet-only)       ; Keep DJ Link traffic off the USB cable before we start listening.
      (timbre/info "Trying to go online, Use Real Player Number?" real-player?)
-     (loop [tries-before-troubleshooting 80]  ; Try for eight seconds before switching to the troubleshooting window.
-       (cond
-         (not (or @continue-offline @quit (zero? tries-before-troubleshooting)
-                  (seq (.getCurrentDevices device-finder))))
-         (do  ; Keep looping and looking until something of interest happens.
-           (Thread/sleep 100)
-           (recur (dec tries-before-troubleshooting)))
-
-         @quit ; User wants to quit.
-         (do
-           (timbre/info "Giving up attempt to go online, user wants to quit.")
-           (seesaw/invoke-soon
-             (some-> @searching seesaw/dispose!)
-             (triggers/quit)))
-
-         @continue-offline ; User wants to continue offline.
-         (do
-           (timbre/info "Giving up attempt to go online, user wants to continue offline.")
-           (seesaw/invoke-soon (some-> @searching seesaw/dispose!)))
-
-         (zero? tries-before-troubleshooting) ; It is time to show or update the troubleshooting interface.
-         (do
-           (if (str/blank? (seesaw/config network-label :text))
-             ;; This is the first time we are displaying troubleshooting information.
-             (seesaw/invoke-now
-               (some-> @searching seesaw/dispose!)
-               (seesaw/config! network-label :text (build-network-description))
-               (reset! searching (about/build-troubleshooting-window network-label continue-offline quit)))
-             (seesaw/invoke-now  ; We are just updating the content of the troubleshooting window.
-               (seesaw/config! network-label :text (build-network-description))))
-           (recur 20))  ; Update every two seconds.
-
-         :else ; We saw a DJ-Link device, and so can go online.
-         (do
-           (seesaw/invoke-soon (some-> @searching seesaw/dispose!))
-           (.setUseStandardPlayerNumber virtual-cdj real-player?)
-           (if (try (.start virtual-cdj) ; Make sure we can start the VirtualCdj
-                    (catch Exception e
-                      (timbre/warn e "Unable to create Virtual CDJ")
-                      (seesaw/invoke-now
-                        (seesaw/alert (str "<html>Unable to create Virtual CDJ, "
-                                           "check log for details.<br><br>" e)
-                                      :title "DJ Link Connection Failed" :type :error))))
-             (do  ; We succeeded in finding a DJ Link network.
-               (timbre/info "Went online, using player number" (.getDeviceNumber virtual-cdj)
-                            "and Opus Quad compatibility mode is" (.inOpusQuadCompatibilityMode virtual-cdj))
-
-               ;; XDJ-AZ Link reports a second network interface in its own window instead of a dialog.
-               (when-let [interfaces (seq (help/list-conflicting-network-interfaces))]
-                 (timbre/warn "Found multiple network interfaces on the DJ Link network:" interfaces))
-
-               (try
-                 (when-let [unreachables (seq (.findUnreachablePlayers virtual-cdj))]
-                   (let [descriptions (map (fn [^DeviceAnnouncement device]
-                                             (str (.getDeviceName device) " (" (.getHostAddress (.getAddress device)) ")"))
-                                           unreachables)]
-                     (seesaw/invoke-now
-                       (seesaw/alert (str "<html>Found devices on multiple networks, and DJ Link can only use one.<br>"
-                                          "We will not be able to communicate with the following device"
-                                          (when (> (count unreachables) 1) "s") ":<br><br>"
-                                          (str/join "<br>" (sort descriptions)))
-                                     :title "Network Configuration Problem" :type :error))))
-                 (catch Exception e
-                   (timbre/error e "Problem finding unreachable players, did network change while going online?"))))
-             (do  ; We could not go online even though we see devices.
-               (timbre/warn "Unable to create Virtual CDJ")
-               (seesaw/invoke-now
-                 (seesaw/alert "Unable to create Virtual CDJ, check the log for details."
-                               :title "DJ Link Connection Failed" :type :error))))))))
+     (loop []
+       (let [online? (try
+                       (.start device-finder)  ; Has no effect if it is already running.
+                       (when (seq (.getCurrentDevices device-finder))
+                         (.setUseStandardPlayerNumber virtual-cdj real-player?)
+                         (if (.start virtual-cdj)
+                           (do
+                             (timbre/info "Went online, using player number" (.getDeviceNumber virtual-cdj)
+                                          "and Opus Quad compatibility mode is"
+                                          (.inOpusQuadCompatibilityMode virtual-cdj))
+                             (when-let [interfaces (seq (help/list-conflicting-network-interfaces))]
+                               (timbre/warn "Found multiple network interfaces on the DJ Link network:" interfaces))
+                             true)
+                           (throw (Exception. "Unable to create Virtual CDJ"))))
+                       (catch Throwable t
+                         (when (not= (str t) @last-problem)
+                           (reset! last-problem (str t))
+                           (timbre/warn t "Unable to go online yet, will keep trying."))
+                         false))]
+         (when-not online?
+           (Thread/sleep 500)
+           (recur)))))
 
    (finish-startup options)))
 
@@ -208,8 +131,7 @@
      ;; where users expect to find them, and add a Quit handler that
      ;; saves the state, and gives users a chance to veto losing
      ;; unsaved editor windows.
-     (menus/install-mac-about-handler)
-     (menus/install-mac-settings-handler)
+     ;; XDJ-AZ Link has no About window and no settings, so it only installs the Quit handler.
      (menus/install-mac-quit-handler)
 
      ;; If we were given instructions to reset our preferences, try to do so.

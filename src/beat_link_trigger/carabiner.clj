@@ -125,24 +125,14 @@
 (beat-carabiner/add-status-listener update-link-status)
 
 ;; Display a warning message if the wrong version of Carabiner is detected.
-(beat-carabiner/add-bad-version-listener (fn [message]
-                                           (seesaw/invoke-later
-                                            (javax.swing.JOptionPane/showMessageDialog
-                                             @carabiner-window
-                                             message
-                                             "Carabiner Upgrade Recommended"
-                                             javax.swing.JOptionPane/WARNING_MESSAGE))))
+(beat-carabiner/add-bad-version-listener (fn [message]  ; XDJ-AZ Link shows no dialogs, it only logs this.
+                                           (timbre/warn "Carabiner upgrade recommended:" message)))
 
 ;; Update our user interface when the Carabiner connection closes, and
 ;; show a warning if it happened unexpectedly.
 (beat-carabiner/add-disconnection-listener (fn [unexpected?]
-                                             (when unexpected?
-                                               (seesaw/invoke-later
-                                                (javax.swing.JOptionPane/showMessageDialog
-                                                 @carabiner-window
-                                                 "Carabiner unexpectedly closed our connection; is it still running?"
-                                                 "Carabiner Connection Closed"
-                                                 javax.swing.JOptionPane/WARNING_MESSAGE)))
+                                             (when unexpected?  ; XDJ-AZ Link shows no dialogs, it only logs this.
+                                               (timbre/warn "Carabiner unexpectedly closed our connection."))
                                              (seesaw/invoke-later
                                               (seesaw/value! (seesaw/select @carabiner-window [:#sync-mode]) "Off"))
                                              (update-connected-status)
@@ -162,13 +152,8 @@
   connection if we have not received an initial status report from the
   Carabiner daemon within a second of opening it."
   []
-  (letfn [(failure-fn [message]
-            (seesaw/invoke-later
-             (javax.swing.JOptionPane/showMessageDialog
-              @carabiner-window
-              message
-              "Carabiner Connection failed"
-              javax.swing.JOptionPane/WARNING_MESSAGE)))]
+  (letfn [(failure-fn [message]  ; XDJ-AZ Link shows no dialogs, its window reports the Link state.
+            (timbre/warn "Carabiner connection failed:" message))]
     (let [result (beat-carabiner/connect failure-fn)]
       (future (update-connected-status))
       result)))
