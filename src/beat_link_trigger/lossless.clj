@@ -540,8 +540,12 @@
                                 (when (ready?)
                                   (when (and @players-shown (nil? @previews))
                                     (reset! previews (mapv (fn [n] (WaveformPreviewComponent. (int n))) decks))
-                                    (doseq [[holder preview] (map vector holders @previews)]
-                                      (seesaw/config! holder :center preview))
+                                    (doseq [[^javax.swing.JPanel holder preview] (map vector holders @previews)]
+                                      ;; Take the placeholder out first, or it stays on top and hides the waveform.
+                                      (.removeAll holder)
+                                      (.add holder ^java.awt.Component preview java.awt.BorderLayout/CENTER)
+                                      (.revalidate holder)
+                                      (.repaint holder))
                                     (fit))
                                   (when (and @waveforms-shown (nil? @details))
                                     (show true)))
@@ -554,7 +558,7 @@
                                     (when @players-shown
                                       (doseq [^JComponent info infos]
                                         (.repaint info))))))))]
-    (.setMinimumSize root (java.awt.Dimension. 1000 60))
+    (.setMinimumSize root (java.awt.Dimension. 600 60))
     (seesaw/config! panels :visible? @players-shown)
     (.pack root)  ; Makes the window measurable; its real size is set just below.
     (.setSize root 1120 (.getHeight root))
