@@ -1,0 +1,82 @@
+name: Build LossLess Link
+
+on:
+  push:
+    branches:
+      - lossless-link
+
+permissions:
+  contents: write
+
+env:
+  app_name: LossLess Link
+  app_java_modules: java.base,java.desktop,java.management,java.naming,java.prefs,java.sql,jdk.javadoc,jdk.zipfs,jdk.unsupported
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  build:
+    name: Build macOS Intel disk image
+    runs-on: macos-15-intel
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Prepare Java 17 for compiling
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'corretto'
+
+    - name: Install clojure tools
+      uses: DeLaGuardo/setup-clojure@13.2
+      with:
+        lein: 2.11.2
+
+    - name: Cache Leiningen dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2/repository
+        key: ${{ runner.os }}-lein-${{ hashFiles('**/project.clj') }}
+        restore-keys: |
+          ${{ runner.os }}-lein-
+
+    - name: Build überjar
+      run: |
+        set -o pipefail
+        (lein -U deps && npm install && lein uberjar) 2>&1 | tee "$RUNNER_TEMP/build.log"
+        mkdir Input
+        mv target/beat-link-trigger.jar Input/lossless-link.jar
+
+    - name: Prepare Java 21 for packaging
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'corretto'
+
+    - name: Build disk image
+      run: |
+        set -o pipefail
+        version="1.0.${{ github.run_number }}"
+        jpackage --name "$app_name" --input Input --add-modules "$app_java_modules" \
+                 --icon .github/resources/BeatLink.icns --main-jar lossless-link.jar \
+                 --description "PRO DJ LINK vers Ableton Link pour XDJ-AZ" \
+                 --mac-package-identifier "ch.lossless.link" --app-version "$version" 2>&1 | tee -a "$RUNNER_TEMP/build.log"
+        mv "$app_name-$version.dmg" "LossLess-Link-$version-Intel.dmg"
+        gh release create "build-${{ github.run_number }}" "LossLess-Link-$version-Intel.dmg" \
+           --target "${{ github.sha }}" --title "LossLess Link $version" \
+           --notes "Version de test pour Mac Intel. Premier lancement : clic droit sur l'appli, puis Ouvrir."
+
+    - name: Publish the build log if something failed
+      if: failure()
+      run: |
+        cp "$RUNNER_TEMP/build.log" /tmp/build.log || echo "no log captured" > /tmp/build.log
+        git config user.name "github-actions"
+        git config user.email "actions@users.noreply.github.com"
+        git checkout --orphan ci-logs
+        git rm -rfq . || true
+        tail -n 400 /tmp/build.log > build.log
+        echo "${{ github.sha }} run ${{ github.run_number }}" > run.txt
+        git add -f build.log run.txt
+        git commit -qm "Build log [skip ci]"
+        git push -f origin ci-logs
