@@ -12,13 +12,10 @@
             [taoensso.timbre :as timbre])
   (:import [java.awt Color Font Graphics2D RenderingHints BasicStroke]
            [java.net Inet4Address NetworkInterface]
-           [java.nio ByteBuffer]
            [javax.swing ImageIcon JComponent JFrame JOptionPane Timer]
            [org.deepsymmetry.beatlink DeviceFinder DeviceUpdate VirtualCdj]
-           [org.deepsymmetry.beatlink.data AnalysisTagFinder AnalysisTagListener BeatGrid BeatGridFinder CueList
-            MetadataFinder SearchableItem TimeFinder TrackMetadata WaveformDetail WaveformDetailComponent
-            WaveformFinder WaveformFinder$WaveformStyle WaveformPreviewComponent]
-           [org.deepsymmetry.cratedigger.pdb RekordboxAnlz$TaggedSection RekordboxAnlz$Wave3bandScrollTag]))
+           [org.deepsymmetry.beatlink.data MetadataFinder SearchableItem TimeFinder TrackMetadata
+            WaveformDetail WaveformDetailComponent WaveformFinder WaveformPreviewComponent]))
 
 (def ^:private decks
   "The deck numbers shown in the window."
@@ -29,8 +26,6 @@
 (def ^:private ^MetadataFinder metadata-finder (MetadataFinder/getInstance))
 (def ^:private ^TimeFinder time-finder (TimeFinder/getInstance))
 (def ^:private ^WaveformFinder waveform-finder (WaveformFinder/getInstance))
-(def ^:private ^AnalysisTagFinder analysis-finder (AnalysisTagFinder/getInstance))
-(def ^:private ^BeatGridFinder beat-grid-finder (BeatGridFinder/getInstance))
 
 (def ^:private usb-port-name
   "The name macOS gives to the network adapter the XDJ-AZ exposes
@@ -196,50 +191,6 @@
   (try
     (count (.getMatchingInterfaces virtual-cdj))
     (catch Throwable _ 0)))
-
-;;; Matching the colors of the XDJ-AZ
-
-;; The XDJ-AZ draws its scrolling waveforms in the three-band style
-;; (blue lows, orange mids, white highs), while its whole-track
-;; waveforms look like the RGB ones we already get. Beat Link only
-;; fetches one style at a time, so we keep RGB as that style, and build
-;; the three-band scrolling waveform ourselves from the track analysis.
-
-(def ^:private three-band-listener
-  "Registering this makes the analysis finder load the three-band
-  scrolling waveform of each track; we look it up when we need it."
-  (reify AnalysisTagListener
-    (analysisChanged [_this _update])))
-
-(defn- three-band-detail
-  "Returns the three-band version of the scrolling waveform of the
-  track loaded on a deck, or `nil` if it is not available (yet) or does
-  not belong to the track whose waveform we currently have."
-  ^WaveformDetail [n]
-  (when (and (.isRunning analysis-finder) (.isRunning waveform-finder))
-    (let [n                           (int n)
-          ^WaveformDetail current     (.getLatestDetailFor waveform-finder n)
-          ^RekordboxAnlz$TaggedSection section (.getLatestTrackAnalysisFor analysis-finder n ".2EX" "PWV7")
-          body                        (when section (.body section))]
-      (when (and current (instance? RekordboxAnlz$Wave3bandScrollTag body))
-        (let [^bytes entries (.entries ^RekordboxAnlz$Wave3bandScrollTag body)]
-          ;; Both styles hold 150 entries per second, so equal lengths mean it is the same track.
-          (when (< (Math/abs (- (quot (alength entries) 3) (.getFrameCount current))) 4)
-            (WaveformDetail. (.-dataReference current) (ByteBuffer/wrap entries)
-                             WaveformFinder$WaveformStyle/THREE_BAND)))))))
-
-(defn- use-three-band
-  "Makes a deck's scrolling waveform component draw the three-band
-  version of its track, once that is available and not already shown."
-  [n ^WaveformDetailComponent component]
-  (let [^WaveformDetail shown (.getWaveform component)]
-    (when (and shown (not= WaveformFinder$WaveformStyle/THREE_BAND (.-style shown)))
-      (when-let [detail (three-band-detail n)]
-        (let [n                 (int n)
-              ^TrackMetadata md (when (.isRunning metadata-finder) (.getLatestMetadataFor metadata-finder n))
-              ^CueList cues     (when md (.getCueList md))
-              ^BeatGrid grid    (when (.isRunning beat-grid-finder) (.getLatestBeatGridFor beat-grid-finder n))]
-          (.setWaveform component detail cues grid))))))
 
 ;;; The About window
 
@@ -426,7 +377,7 @@
 
 (defonce ^{:private true
            :doc     "Whether the two player panels are currently shown."}
-  players-shown (atom true))
+  players-shown (atom false))
 
 (def ^:private toggle-x
   "Where the control that shows or hides the scrolling waveforms starts
@@ -509,10 +460,10 @@
 
 (defn- create-window
   "Builds the XDJ-AZ Link window. `quit-fn` is called when the user
-  closes it. The scrolling waveforms start hidden, and are only built
-  and animated while they are shown, because drawing them is what
-  keeps the computer busy. The players can be hidden as well, leaving
-  only the header."
+  closes it. The scrolling waveforms and the players both start
+  hidden, leaving only the header. The scrolling waveforms are only
+  built and animated while they are shown, because drawing them is
+  what keeps the computer busy."
   [quit-fn]
   (let [holders  (mapv (fn [_]  ; Each receives the whole-track waveform of its deck once we are online.
                          (seesaw/border-panel
@@ -537,11 +488,18 @@
         content  (seesaw/border-panel :background Color/BLACK :vgap 8 :border 10
                                       :north header :center scrolls :south panels)
         ^JFrame root (seesaw/frame :title "XDJ-AZ Link" :on-close :nothing :content content)
-        fit      (fn []  ; Keep the width the user chose, and take the height the content needs.
-                   (let [width (.getWidth root)]
-                     (.pack root)
-                     (when (> width (.getWidth root))
-                       (.setSize root width (.getHeight root)))))
+        fit      (fn []  ; Never change the width; take the height the content needs, within the screen.
+                   (let [screen (if-let [config (.getGraphicsConfiguration root)]
+                                  (.getBounds config)
+                                  (java.awt.Rectangle. 0 0 1440 900))
+                         width  (min (.getWidth root) (.-width screen))
+                         height (min (.-height (.getPreferredSize root)) (.-height screen))]
+                     (.setSize root (int width) (int height))
+                     ;; Move the window up if unfolding it pushed its bottom off the screen.
+                     (let [lowest (- (+ (.-y screen) (.-height screen)) height)]
+                       (when (> (.getY root) lowest)
+                         (.setLocation root (.getX root) (int (max (.-y screen) lowest)))))
+                     (.validate root)))
         show     (fn [shown?]
                    (reset! waveforms-shown shown?)
                    (when (and shown? (nil? @details))
@@ -577,11 +535,6 @@
                                     (fit))
                                   (when (and @waveforms-shown (nil? @details))
                                     (show true)))
-                                ;; Draw the scrolling waveforms in the colors the XDJ-AZ uses.
-                                (when @waveforms-shown
-                                  (doseq [[n detail] (map vector decks @details)]
-                                    (when (instance? WaveformDetailComponent detail)
-                                      (safely #(use-three-band n detail)))))
                                 ;; Only redraw when something we show has changed.
                                 (let [now [(mapv deck-state decks) (players-visible?) (interface-count) (link-bpm)]]
                                   (when (not= now @painted)
@@ -590,9 +543,10 @@
                                     (when @players-shown
                                       (doseq [^JComponent info infos]
                                         (.repaint info))))))))]
-    (.addAnalysisTagListener analysis-finder three-band-listener ".2EX" "PWV7")
     (.setMinimumSize root (java.awt.Dimension. 1000 60))
-    (.pack root)
+    (seesaw/config! panels :visible? @players-shown)
+    (.pack root)  ; Makes the window measurable; its real size is set just below.
+    (.setSize root 1120 (.getHeight root))
     (util/restore-window-position root :lossless nil)
     (fit)
     (seesaw/listen header :mouse-pressed (fn [^java.awt.event.MouseEvent e]
