@@ -1,4 +1,4 @@
-name: Build LossLess Link
+name: Build XDJ-AZ Link
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  app_name: LossLess Link
+  app_name: XDJ-AZ Link
   app_java_modules: java.base,java.desktop,java.management,java.naming,java.prefs,java.sql,jdk.javadoc,jdk.zipfs,jdk.unsupported
   GH_TOKEN: ${{ github.token }}
   LEIN_SNAPSHOTS_IN_RELEASE: 1
@@ -60,12 +60,12 @@ jobs:
         set -o pipefail
         version="1.0.${{ github.run_number }}"
         jpackage --name "$app_name" --input Input --add-modules "$app_java_modules" \
-                 --icon .github/resources/BeatLink.icns --main-jar lossless-link.jar \
+                 --icon .github/resources/AZLink.icns --main-jar lossless-link.jar \
                  --description "PRO DJ LINK vers Ableton Link pour XDJ-AZ" \
                  --mac-package-identifier "ch.lossless.link" --app-version "$version" 2>&1 | tee -a "$RUNNER_TEMP/build.log"
-        mv "$app_name-$version.dmg" "LossLess-Link-$version-Intel.dmg"
-        gh release create "build-${{ github.run_number }}" "LossLess-Link-$version-Intel.dmg" Input/lossless-link.jar \
-           --target "${{ github.sha }}" --title "LossLess Link $version" \
+        mv "$app_name-$version.dmg" "XDJ-AZ-Link-$version-Intel.dmg"
+        gh release create "build-${{ github.run_number }}" "XDJ-AZ-Link-$version-Intel.dmg" Input/lossless-link.jar \
+           --target "${{ github.sha }}" --title "XDJ-AZ Link $version" \
            --notes "Version de test pour Mac Intel. Premier lancement : clic droit sur l'appli, puis Ouvrir."
 
     - name: Publish the build log if something failed

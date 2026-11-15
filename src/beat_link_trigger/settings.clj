@@ -255,7 +255,7 @@
   goes online."
   [trigger-frame expression-globals]
   (let [preferences (prefs/get-preferences)]
-    ;; LossLess Link never opens the Player Status window, and always syncs Ableton Link
+    ;; XDJ-AZ Link never opens the Player Status window, and always syncs Ableton Link
     ;; to the players (Passive mode, aligned at the bar level) unless the stored settings say otherwise.
     (let [mode (-> (:carabiner-startup-mode preferences "Passive")
                    str/lower-case

@@ -1815,7 +1815,7 @@
       (seesaw/config! triggers :items (recreate-trigger-rows))
       (adjust-triggers)
       (util/restore-window-position root :triggers nil)
-      ;; LossLess Link keeps the Triggers window hidden; it still runs everything behind the scenes.
+      ;; XDJ-AZ Link keeps the Triggers window hidden; it still runs everything behind the scenes.
       (check-for-parse-error)
       (prefs/register-ui-change-callback theme-callback)
       (seesaw/listen root
@@ -1884,7 +1884,7 @@
   []
   (let [already-created @trigger-frame]
     (if @trigger-frame
-      (rebuild-all-device-status)  ; LossLess Link keeps the Triggers window hidden.
+      (rebuild-all-device-status)  ; XDJ-AZ Link keeps the Triggers window hidden.
       (do
         ;; Request notifications when MIDI devices appear or vanish
         (CoreMidiDeviceProvider/addNotificationListener

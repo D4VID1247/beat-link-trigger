@@ -1,5 +1,5 @@
 (ns beat-link-trigger.lossless
-  "The single, minimal LossLess Link window. It shows the scrolling
+  "The single, minimal XDJ-AZ Link window. It shows the scrolling
   waveforms of both decks and the essentials about each of them, in
   the style of the XDJ-AZ screen, and hides every setting. Also makes
   sure the DJ Link traffic only travels over the Ethernet cable."
@@ -77,7 +77,7 @@
   [^String message ^String yes ^String no]
   (seesaw/invoke-now
    (let [options (to-array [yes no])]
-     (zero? (JOptionPane/showOptionDialog nil message "LossLess Link"
+     (zero? (JOptionPane/showOptionDialog nil message "XDJ-AZ Link"
                                           JOptionPane/YES_NO_OPTION JOptionPane/QUESTION_MESSAGE
                                           nil options (aget options 0))))))
 
@@ -85,7 +85,7 @@
   "Shows a message the user has to acknowledge."
   [^String message]
   (seesaw/invoke-now
-   (JOptionPane/showMessageDialog nil message "LossLess Link" JOptionPane/WARNING_MESSAGE)))
+   (JOptionPane/showMessageDialog nil message "XDJ-AZ Link" JOptionPane/WARNING_MESSAGE)))
 
 (defn- turn-off-service
   "Asks macOS to deactivate a network service, which makes it request
@@ -112,7 +112,7 @@
         (timbre/info "The USB network of the XDJ-AZ is active:" service device)
         (when (confirm (str "<html>Le XDJ-AZ est aussi relié au Mac par un réseau qui passe dans le câble USB<br>"
                             "(« " service " », " device ").<br><br>"
-                            "Pour que LossLess Link ne reçoive ses informations que par le câble Ethernet,<br>"
+                            "Pour que XDJ-AZ Link ne reçoive ses informations que par le câble Ethernet,<br>"
                             "ce réseau USB doit être désactivé. L'audio et le MIDI ne sont pas concernés.<br><br>"
                             "macOS va demander le mot de passe du Mac. C'est à faire une seule fois.")
                        "Désactiver le réseau USB" "Plus tard")
@@ -246,7 +246,7 @@
     (f)
     (catch Throwable t
       (when (compare-and-set! paint-problem-logged false true)
-        (timbre/error t "Problem painting the LossLess Link window.")))))
+        (timbre/error t "Problem painting the XDJ-AZ Link window.")))))
 
 (defn- paint-deck
   "Paints the information panel of a deck."
@@ -322,9 +322,28 @@
        (fill g deck-blue 0 9 16 16)
        (text g (font Font/BOLD 15) deck-blue (str "DECK " n) 24 23)))))
 
+(defonce ^{:private true
+           :doc     "Whether the scrolling waveforms are currently shown."}
+  waveforms-shown (atom false))
+
+(def ^:private toggle-x
+  "Where the control that shows or hides the scrolling waveforms starts
+  in the header."
+  150)
+
+(def ^:private toggle-end
+  "Where that control ends: a click to the left of this toggles it."
+  270)
+
+(defn- link-bpm
+  "Returns the tempo of the Ableton Link session when we are connected."
+  []
+  (when (beat-carabiner/active?) (:link-bpm (beat-carabiner/state))))
+
 (defn- paint-header
-  "Paints the bar at the top of the window, with the state of the
-  Ethernet connection and of Ableton Link."
+  "Paints the bar at the top of the window, with the control that
+  shows the scrolling waveforms, and the state of the Ethernet
+  connection and of Ableton Link."
   [^JComponent c ^Graphics2D g]
   (safely
    (fn []
@@ -332,7 +351,7 @@
            h          (.getHeight c)
            online?    (util/online?)
            interfaces (if online? (interface-count) 0)
-           link-bpm   (when (beat-carabiner/active?) (:link-bpm (beat-carabiner/state)))
+           link-bpm   (link-bpm)
            small      (font Font/BOLD 13)
            status     (fn [^Color color label right]
                         (let [x (text-right g small color label right 26)]
@@ -341,7 +360,14 @@
                           (- x 40)))]
        (smooth g)
        (fill g Color/BLACK 0 0 w h)
-       (text g (font Font/BOLD 17) Color/WHITE "LOSSLESS LINK" 16 27)
+       (text g (font Font/BOLD 17) Color/WHITE "XDJ-AZ LINK" 16 27)
+
+       ;; The control that shows or hides the scrolling waveforms.
+       (.setColor g label-grey)
+       (if @waveforms-shown
+         (.fillPolygon g (int-array [toggle-x (+ toggle-x 10) (+ toggle-x 5)]) (int-array [17 17 25]) 3)
+         (.fillPolygon g (int-array [(+ toggle-x 1) (+ toggle-x 9) (+ toggle-x 1)]) (int-array [15 21 27]) 3))
+       (text g small label-grey "WAVEFORMS" (+ toggle-x 17) 26)
        (let [right (- w 16)
              right (if link-bpm
                      (status link-green
@@ -360,17 +386,20 @@
            :doc     "Holds the window once it has been created."}
   window (atom nil))
 
+(defn- waveform-row
+  "Builds the row holding a deck's label and its scrolling waveform."
+  [n detail]
+  (seesaw/border-panel :background Color/BLACK
+                       :west (seesaw/canvas :paint (partial paint-deck-label n) :preferred-size [100 :by 120])
+                       :center detail))
+
 (defn- create-window
-  "Builds the LossLess Link window. `quit-fn` is called when the user
-  closes it."
+  "Builds the XDJ-AZ Link window. `quit-fn` is called when the user
+  closes it. The scrolling waveforms start hidden, and are only built
+  and animated while they are shown, because drawing them is what
+  keeps the computer busy."
   [quit-fn]
   (let [online?  (util/online?)  ; The waveform components would stall the window while offline.
-        details  (mapv (fn [n]
-                         (if online?
-                           (doto (WaveformDetailComponent. (int n))
-                             (.setScale 1))
-                           (seesaw/canvas :background Color/BLACK)))
-                       decks)
         previews (mapv (fn [n]
                          (if online?
                            (WaveformPreviewComponent. (int n))
@@ -378,13 +407,8 @@
                        decks)
         header   (seesaw/canvas :paint paint-header :preferred-size [1100 :by 40])
         scrolls  (seesaw/grid-panel :rows (count decks) :columns 1 :vgap 6 :background Color/BLACK
-                                    :items (mapv (fn [n detail]
-                                                   (seesaw/border-panel
-                                                    :background Color/BLACK
-                                                    :west (seesaw/canvas :paint (partial paint-deck-label n)
-                                                                         :preferred-size [100 :by 120])
-                                                    :center detail))
-                                                 decks details))
+                                    :visible? false)
+        details  (atom nil)
         infos    (mapv (fn [n]
                          (seesaw/canvas :paint (partial paint-deck n) :preferred-size [540 :by 156]))
                        decks)
@@ -397,15 +421,46 @@
                                                  infos previews))
         content  (seesaw/border-panel :background Color/BLACK :vgap 8 :border 10
                                       :north header :center scrolls :south panels)
-        ^JFrame root (seesaw/frame :title "LossLess Link" :on-close :nothing :content content
-                                   :size [1120 :by 660])
-        timer    (Timer. 33 (reify java.awt.event.ActionListener
+        ^JFrame root (seesaw/frame :title "XDJ-AZ Link" :on-close :nothing :content content)
+        fit      (fn []  ; Keep the width the user chose, and take the height the content needs.
+                   (let [width (.getWidth root)]
+                     (.pack root)
+                     (when (> width (.getWidth root))
+                       (.setSize root width (.getHeight root)))))
+        show     (fn [shown?]
+                   (reset! waveforms-shown shown?)
+                   (when (and shown? (nil? @details))
+                     (let [built (mapv (fn [n]
+                                         (if (util/online?)
+                                           (doto (WaveformDetailComponent. (int n))
+                                             (.setScale 1))
+                                           (seesaw/canvas :background Color/BLACK)))
+                                       decks)]
+                       (when (util/online?) (reset! details built))  ; Offline placeholders get rebuilt next time.
+                       (seesaw/config! scrolls :items (mapv waveform-row decks built))))
+                   (doseq [[n detail] (map vector decks @details)]
+                     (when (instance? WaveformDetailComponent detail)
+                       (.setMonitoredPlayer ^WaveformDetailComponent detail (int (if shown? n 0)))))
+                   (seesaw/config! scrolls :visible? shown?)
+                   (fit)
+                   (.repaint ^JComponent header))
+        painted  (atom nil)
+        timer    (Timer. 66 (reify java.awt.event.ActionListener
                               (actionPerformed [_this _event]
-                                (.repaint ^JComponent header)
-                                (doseq [^JComponent info infos]
-                                  (.repaint info)))))]
-    (.setMinimumSize root (java.awt.Dimension. 1000 560))
+                                ;; Only redraw when something we show has changed.
+                                (let [now [(mapv deck-state decks) (util/online?) (interface-count) (link-bpm)]]
+                                  (when (not= now @painted)
+                                    (reset! painted now)
+                                    (.repaint ^JComponent header)
+                                    (doseq [^JComponent info infos]
+                                      (.repaint info)))))))]
+    (.setMinimumSize root (java.awt.Dimension. 1000 200))
+    (.pack root)
     (util/restore-window-position root :lossless nil)
+    (fit)
+    (seesaw/listen header :mouse-pressed (fn [^java.awt.event.MouseEvent e]
+                                           (when (< (.getX e) toggle-end)
+                                             (show (not @waveforms-shown)))))
     (seesaw/listen root
                    :window-closing (fn [_] (quit-fn))
                    :component-moved (fn [_] (util/save-window-position root :lossless))
@@ -414,7 +469,7 @@
     root))
 
 (defn show-window
-  "Shows the LossLess Link window, creating it the first time.
+  "Shows the XDJ-AZ Link window, creating it the first time.
   `quit-fn` is called when the user closes the window."
   [quit-fn]
   (seesaw/invoke-now
@@ -425,4 +480,4 @@
        (seesaw/show! root)
        (.toFront root))
      (catch Throwable t
-       (timbre/error t "Problem showing the LossLess Link window.")))))
+       (timbre/error t "Problem showing the XDJ-AZ Link window.")))))

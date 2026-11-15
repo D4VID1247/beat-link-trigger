@@ -49,7 +49,7 @@
      (when-not suppress
        (show/reopen-previous-shows))
      (show/reopen-specified-shows show))
-   (lossless/show-window triggers/quit)))  ; The only window LossLess Link shows.
+   (lossless/show-window triggers/quit)))  ; The only window XDJ-AZ Link shows.
 
 (defn- build-network-description
   "Returns a string suitable for creating a `JLabel` describing the
@@ -72,7 +72,7 @@
   ([options]
    (let [continue-offline (atom false)
          quit             (atom false)
-         searching        (atom (about/create-searching-frame continue-offline quit))
+         searching        (atom nil)  ; XDJ-AZ Link shows no splash screen while it looks for the players.
          real-player?     (triggers/real-player?)
          network-label    (seesaw/invoke-now (seesaw/label))]
      (lossless/ensure-ethernet-only)  ; Keep DJ Link traffic off the USB cable before we start listening.
@@ -84,17 +84,17 @@
            (seesaw/alert (str "<html>Unable to search for devices, socket is in use.<br>"
                               "Is rekordbox or another DJ Link program running?")
                          :title "Failed to Go Online" :type :error)
-           (seesaw/dispose! @searching)
+           (some-> @searching seesaw/dispose!)
            (reset! quit true)))
        (catch Throwable t
          (timbre/error t "Problem starting Device Finder, staying offline.")
          (seesaw/invoke-now
            (seesaw/alert (str "<html>Unable to search for devices, check the log file for details.<br><br>" t)
                          :title "Problem Trying to Go Online" :type :error)
-           (seesaw/dispose! @searching)
+           (some-> @searching seesaw/dispose!)
            (reset! quit true))))
      (timbre/info "Trying to go online, Use Real Player Number?" real-player?)
-     (loop [tries-before-troubleshooting 200]  ; Try for twenty seconds before switching to the troubleshooting window.
+     (loop [tries-before-troubleshooting 80]  ; Try for eight seconds before switching to the troubleshooting window.
        (cond
          (not (or @continue-offline @quit (zero? tries-before-troubleshooting)
                   (seq (.getCurrentDevices device-finder))))
@@ -106,20 +106,20 @@
          (do
            (timbre/info "Giving up attempt to go online, user wants to quit.")
            (seesaw/invoke-soon
-             (seesaw/dispose! @searching)
+             (some-> @searching seesaw/dispose!)
              (triggers/quit)))
 
          @continue-offline ; User wants to continue offline.
          (do
            (timbre/info "Giving up attempt to go online, user wants to continue offline.")
-           (seesaw/invoke-soon (seesaw/dispose! @searching)))
+           (seesaw/invoke-soon (some-> @searching seesaw/dispose!)))
 
          (zero? tries-before-troubleshooting) ; It is time to show or update the troubleshooting interface.
          (do
            (if (str/blank? (seesaw/config network-label :text))
              ;; This is the first time we are displaying troubleshooting information.
              (seesaw/invoke-now
-               (seesaw/dispose! @searching)
+               (some-> @searching seesaw/dispose!)
                (seesaw/config! network-label :text (build-network-description))
                (reset! searching (about/build-troubleshooting-window network-label continue-offline quit)))
              (seesaw/invoke-now  ; We are just updating the content of the troubleshooting window.
@@ -128,7 +128,7 @@
 
          :else ; We saw a DJ-Link device, and so can go online.
          (do
-           (seesaw/invoke-soon (seesaw/dispose! @searching))
+           (seesaw/invoke-soon (some-> @searching seesaw/dispose!))
            (.setUseStandardPlayerNumber virtual-cdj real-player?)
            (if (try (.start virtual-cdj) ; Make sure we can start the VirtualCdj
                     (catch Exception e
@@ -141,7 +141,7 @@
                (timbre/info "Went online, using player number" (.getDeviceNumber virtual-cdj)
                             "and Opus Quad compatibility mode is" (.inOpusQuadCompatibilityMode virtual-cdj))
 
-               ;; LossLess Link reports a second network interface in its own window instead of a dialog.
+               ;; XDJ-AZ Link reports a second network interface in its own window instead of a dialog.
                (when-let [interfaces (seq (help/list-conflicting-network-interfaces))]
                  (timbre/warn "Found multiple network interfaces on the DJ Link network:" interfaces))
 
@@ -189,7 +189,7 @@
      ;; Sadly, this no longer works in current macOS versions, so we
      ;; need to continue to rely on the bundle descriptor, and lack
      ;; a valid name when running in development or as a loose jar.
-     (System/setProperty "apple.awt.application.name" "LossLess Link")
+     (System/setProperty "apple.awt.application.name" "XDJ-AZ Link")
 
      ;; Allow dark title bars. This is supposed to be back-ported to Java 11.0.8,
      ;; but it is not yet working either.
