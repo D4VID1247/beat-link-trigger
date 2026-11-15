@@ -13,7 +13,7 @@
   (:import [java.awt Color Font Graphics2D RenderingHints BasicStroke]
            [java.net Inet4Address NetworkInterface]
            [javax.swing ImageIcon JComponent JFrame JOptionPane Timer]
-           [org.deepsymmetry.beatlink Beat BeatFinder BeatListener DeviceFinder DeviceUpdate MixerStatus VirtualCdj]
+           [org.deepsymmetry.beatlink DeviceFinder DeviceUpdate VirtualCdj]
            [org.deepsymmetry.beatlink.data MetadataFinder SearchableItem TimeFinder TrackMetadata
             WaveformDetail WaveformDetailComponent WaveformFinder WaveformPreviewComponent]))
 
@@ -235,10 +235,11 @@
 (def ^:private link-green (Color. 60 210 90))
 (def ^:private offline-red (Color. 235 60 50))
 
-(defn- font
-  "Builds the font we use at the given style and size."
-  ^Font [style size]
-  (Font. "Helvetica Neue" (int style) (int size)))
+(def ^:private font
+  "Returns the font we use at the given style and size. The fonts are
+  kept, so painting does not build new ones each time."
+  (memoize (fn [style size]
+             (Font. "Helvetica Neue" (int style) (int size)))))
 
 (defn- smooth
   "Turns on antialiasing."
@@ -408,40 +409,6 @@
   []
   (when (beat-carabiner/active?) (:link-bpm (beat-carabiner/state))))
 
-(defonce ^{:private true
-           :doc     "When the mixer section of the XDJ-AZ last sent a beat, and at what tempo."}
-  mixer-beat (atom nil))
-
-(def ^:private mixer-beat-listener
-  "Notices the beats sent by the mixer section of the XDJ-AZ, which
-  follow the tempo its Beat FX detects, rather than those of a deck."
-  (reify BeatListener
-    (newBeat [_this beat]
-      (let [^Beat beat beat]
-        (when (> (.getDeviceNumber beat) 6)  ; Decks use the low numbers, the mixer uses 33.
-          (reset! mixer-beat {:at  (System/currentTimeMillis)
-                              :bpm (.getEffectiveTempo beat)}))))))
-
-(defn- beat-fx-state
-  "Reports what the mixer section of the XDJ-AZ tells us about the
-  tempo its Beat FX detects: whether the mixer is `:seen?` at all, the
-  `:bpm` it reports if any, and whether its `:beats?` are arriving."
-  []
-  (cond
-    demo?
-    {:seen? true :bpm 117.3 :beats? true}
-
-    (players-visible?)
-    (let [^MixerStatus status (first (filter #(instance? MixerStatus %) (.getLatestStatus virtual-cdj)))
-          beat                @mixer-beat
-          beats?              (boolean (and beat (< (- (System/currentTimeMillis) (long (:at beat))) 2000)))
-          bpm                 (cond
-                                (and status (not= 65535 (.getBpm status))) (.getEffectiveTempo status)
-                                beats?                                     (:bpm beat))]
-      {:seen?  (or (some? status) beats?)
-       :bpm    (when bpm (/ (Math/round (* 10.0 (double bpm))) 10.0))
-       :beats? beats?})))
-
 (defn- paint-header
   "Paints the bar at the top of the window, with the control that
   shows the scrolling waveforms, and the state of the Ethernet
@@ -478,14 +445,7 @@
                      (not online?)    (status offline-red "ETHERNET" right)
                      (> interfaces 1) (status master-orange "ETHERNET + USB" right)
                      :else            (status link-green "ETHERNET" right))]
-         ;; The tempo detected by the Beat FX: green while the mixer also sends its beats.
-         (when-let [{:keys [seen? bpm beats?]} (beat-fx-state)]
-           (status (if beats? link-green label-grey)
-                   (cond
-                     (not seen?) "BEAT FX ABSENT"
-                     bpm         (String/format java.util.Locale/ROOT "BEAT FX  %.1f BPM" (to-array [(double bpm)]))
-                     :else       "BEAT FX  --.-")
-                   right)))))))
+         right)))))
 
 ;;; The window
 
@@ -560,17 +520,24 @@
                    (seesaw/config! scrolls :visible? shown?)
                    (fit)
                    (.repaint ^JComponent header))
-        players  (fn [shown?]
+        players  (fn [shown?]  ; The whole-track waveforms only follow the decks while they are shown.
                    (reset! players-shown shown?)
+                   (doseq [[n preview] (map vector decks @previews)]
+                     (.setMonitoredPlayer ^WaveformPreviewComponent preview (int (if shown? n 0))))
                    (seesaw/config! panels :visible? shown?)
                    (fit)
                    (.repaint ^JComponent header))
         painted  (atom nil)
         timer    (Timer. 66 (reify java.awt.event.ActionListener
-                              (actionPerformed [_this _event]
+                              (actionPerformed [_this event]
+                                ;; With the players folded only the header is left, which changes rarely.
+                                (let [^Timer timer (.getSource ^java.awt.event.ActionEvent event)
+                                      delay        (if @players-shown 66 250)]
+                                  (when (not= delay (.getDelay timer))
+                                    (.setDelay timer (int delay))))
                                 ;; As soon as we are online, bring in the waveforms that had to wait.
                                 (when (ready?)
-                                  (when (nil? @previews)
+                                  (when (and @players-shown (nil? @previews))
                                     (reset! previews (mapv (fn [n] (WaveformPreviewComponent. (int n))) decks))
                                     (doseq [[holder preview] (map vector holders @previews)]
                                       (seesaw/config! holder :center preview))
@@ -578,14 +545,14 @@
                                   (when (and @waveforms-shown (nil? @details))
                                     (show true)))
                                 ;; Only redraw when something we show has changed.
-                                (let [now [(mapv deck-state decks) (players-visible?) (interface-count) (link-bpm) (beat-fx-state)]]
+                                (let [now [(when @players-shown (mapv deck-state decks))
+                                           (players-visible?) (interface-count) (link-bpm)]]
                                   (when (not= now @painted)
                                     (reset! painted now)
                                     (.repaint ^JComponent header)
                                     (when @players-shown
                                       (doseq [^JComponent info infos]
                                         (.repaint info))))))))]
-    (.addBeatListener (BeatFinder/getInstance) mixer-beat-listener)
     (.setMinimumSize root (java.awt.Dimension. 1000 60))
     (seesaw/config! panels :visible? @players-shown)
     (.pack root)  ; Makes the window measurable; its real size is set just below.
