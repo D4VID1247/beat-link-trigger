@@ -364,11 +364,18 @@
   "Builds the LossLess Link window. `quit-fn` is called when the user
   closes it."
   [quit-fn]
-  (let [details  (mapv (fn [n]
-                         (doto (WaveformDetailComponent. (int n))
-                           (.setScale 1)))
+  (let [online?  (util/online?)  ; The waveform components would stall the window while offline.
+        details  (mapv (fn [n]
+                         (if online?
+                           (doto (WaveformDetailComponent. (int n))
+                             (.setScale 1))
+                           (seesaw/canvas :background Color/BLACK)))
                        decks)
-        previews (mapv (fn [n] (WaveformPreviewComponent. (int n))) decks)
+        previews (mapv (fn [n]
+                         (if online?
+                           (WaveformPreviewComponent. (int n))
+                           (seesaw/canvas :background Color/BLACK :preferred-size [400 :by 60])))
+                       decks)
         header   (seesaw/canvas :paint paint-header :preferred-size [1100 :by 40])
         scrolls  (seesaw/grid-panel :rows (count decks) :columns 1 :vgap 6 :background Color/BLACK
                                     :items (mapv (fn [n detail]
