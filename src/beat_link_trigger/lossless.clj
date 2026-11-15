@@ -5,16 +5,20 @@
   sure the DJ Link traffic only travels over the Ethernet cable."
   (:require [beat-carabiner.core :as beat-carabiner]
             [beat-link-trigger.util :as util]
+            [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
             [seesaw.core :as seesaw]
             [taoensso.timbre :as timbre])
   (:import [java.awt Color Font Graphics2D RenderingHints BasicStroke]
            [java.net Inet4Address NetworkInterface]
-           [javax.swing JComponent JFrame JOptionPane Timer]
+           [java.nio ByteBuffer]
+           [javax.swing ImageIcon JComponent JFrame JOptionPane Timer]
            [org.deepsymmetry.beatlink DeviceFinder DeviceUpdate VirtualCdj]
-           [org.deepsymmetry.beatlink.data MetadataFinder SearchableItem TimeFinder TrackMetadata
-            WaveformDetail WaveformDetailComponent WaveformFinder WaveformPreviewComponent]))
+           [org.deepsymmetry.beatlink.data AnalysisTagFinder AnalysisTagListener BeatGrid BeatGridFinder CueList
+            MetadataFinder SearchableItem TimeFinder TrackMetadata WaveformDetail WaveformDetailComponent
+            WaveformFinder WaveformFinder$WaveformStyle WaveformPreviewComponent]
+           [org.deepsymmetry.cratedigger.pdb RekordboxAnlz$TaggedSection RekordboxAnlz$Wave3bandScrollTag]))
 
 (def ^:private decks
   "The deck numbers shown in the window."
@@ -25,6 +29,8 @@
 (def ^:private ^MetadataFinder metadata-finder (MetadataFinder/getInstance))
 (def ^:private ^TimeFinder time-finder (TimeFinder/getInstance))
 (def ^:private ^WaveformFinder waveform-finder (WaveformFinder/getInstance))
+(def ^:private ^AnalysisTagFinder analysis-finder (AnalysisTagFinder/getInstance))
+(def ^:private ^BeatGridFinder beat-grid-finder (BeatGridFinder/getInstance))
 
 (def ^:private usb-port-name
   "The name macOS gives to the network adapter the XDJ-AZ exposes
@@ -191,6 +197,84 @@
     (count (.getMatchingInterfaces virtual-cdj))
     (catch Throwable _ 0)))
 
+;;; Matching the colors of the XDJ-AZ
+
+;; The XDJ-AZ draws its scrolling waveforms in the three-band style
+;; (blue lows, orange mids, white highs), while its whole-track
+;; waveforms look like the RGB ones we already get. Beat Link only
+;; fetches one style at a time, so we keep RGB as that style, and build
+;; the three-band scrolling waveform ourselves from the track analysis.
+
+(def ^:private three-band-listener
+  "Registering this makes the analysis finder load the three-band
+  scrolling waveform of each track; we look it up when we need it."
+  (reify AnalysisTagListener
+    (analysisChanged [_this _update])))
+
+(defn- three-band-detail
+  "Returns the three-band version of the scrolling waveform of the
+  track loaded on a deck, or `nil` if it is not available (yet) or does
+  not belong to the track whose waveform we currently have."
+  ^WaveformDetail [n]
+  (when (and (.isRunning analysis-finder) (.isRunning waveform-finder))
+    (let [n                           (int n)
+          ^WaveformDetail current     (.getLatestDetailFor waveform-finder n)
+          ^RekordboxAnlz$TaggedSection section (.getLatestTrackAnalysisFor analysis-finder n ".2EX" "PWV7")
+          body                        (when section (.body section))]
+      (when (and current (instance? RekordboxAnlz$Wave3bandScrollTag body))
+        (let [^bytes entries (.entries ^RekordboxAnlz$Wave3bandScrollTag body)]
+          ;; Both styles hold 150 entries per second, so equal lengths mean it is the same track.
+          (when (< (Math/abs (- (quot (alength entries) 3) (.getFrameCount current))) 4)
+            (WaveformDetail. (.-dataReference current) (ByteBuffer/wrap entries)
+                             WaveformFinder$WaveformStyle/THREE_BAND)))))))
+
+(defn- use-three-band
+  "Makes a deck's scrolling waveform component draw the three-band
+  version of its track, once that is available and not already shown."
+  [n ^WaveformDetailComponent component]
+  (let [^WaveformDetail shown (.getWaveform component)]
+    (when (and shown (not= WaveformFinder$WaveformStyle/THREE_BAND (.-style shown)))
+      (when-let [detail (three-band-detail n)]
+        (let [n                 (int n)
+              ^TrackMetadata md (when (.isRunning metadata-finder) (.getLatestMetadataFor metadata-finder n))
+              ^CueList cues     (when md (.getCueList md))
+              ^BeatGrid grid    (when (.isRunning beat-grid-finder) (.getLatestBeatGridFor beat-grid-finder n))]
+          (.setWaveform component detail cues grid))))))
+
+;;; The About window
+
+(defn- show-about
+  "Shows the small About window."
+  []
+  (seesaw/invoke-later
+   (let [version (System/getProperty "jpackage.app-version")
+         image   (io/resource "images/AZLink.png")
+         icon    (when image
+                   (ImageIcon. (.getScaledInstance (.getImage (ImageIcon. image)) 128 128 java.awt.Image/SCALE_SMOOTH)))]
+     (JOptionPane/showMessageDialog
+      nil
+      (str "<html><b style='font-size:15pt'>XDJ-AZ Link</b><br>"
+           (when version (str "Version " version "<br>"))
+           "<br>Relie le XDJ-AZ à Ableton Link par PRO DJ LINK,<br>"
+           "uniquement par le câble Ethernet.<br><br>"
+           "<span style='color:gray'>Basé sur Beat Link Trigger, de Deep Symmetry<br>"
+           "(logiciel libre, licence Eclipse Public License 2.0).</span>")
+      "À propos de XDJ-AZ Link" JOptionPane/PLAIN_MESSAGE icon))))
+
+(defn install-about-handler
+  "Makes the About item of the macOS application menu show our own
+  About window."
+  []
+  (try
+    (when (java.awt.Desktop/isDesktopSupported)
+      (let [desktop (java.awt.Desktop/getDesktop)]
+        (when (.isSupported desktop java.awt.Desktop$Action/APP_ABOUT)
+          (.setAboutHandler desktop (reify java.awt.desktop.AboutHandler
+                                      (handleAbout [_this _event]
+                                        (show-about)))))))
+    (catch Throwable t
+      (timbre/warn t "Unable to install the About handler."))))
+
 ;;; Drawing
 
 (def ^:private deck-blue (Color. 30 130 235))
@@ -340,14 +424,33 @@
            :doc     "Whether the scrolling waveforms are currently shown."}
   waveforms-shown (atom false))
 
+(defonce ^{:private true
+           :doc     "Whether the two player panels are currently shown."}
+  players-shown (atom true))
+
 (def ^:private toggle-x
   "Where the control that shows or hides the scrolling waveforms starts
   in the header."
   150)
 
 (def ^:private toggle-end
-  "Where that control ends: a click to the left of this toggles it."
-  270)
+  "Where that control ends, and the one for the players starts."
+  276)
+
+(def ^:private players-toggle-end
+  "Where the control that shows or hides the players ends."
+  380)
+
+(defn- paint-toggle
+  "Paints a control that shows or hides part of the window: a triangle
+  pointing down when that part is shown, right when it is hidden,
+  followed by a label."
+  [^Graphics2D g ^Font f x shown? label]
+  (.setColor g label-grey)
+  (if shown?
+    (.fillPolygon g (int-array [x (+ x 10) (+ x 5)]) (int-array [17 17 25]) 3)
+    (.fillPolygon g (int-array [(+ x 1) (+ x 9) (+ x 1)]) (int-array [15 21 27]) 3))
+  (text g f label-grey label (+ x 17) 26))
 
 (defn- link-bpm
   "Returns the tempo of the Ableton Link session when we are connected."
@@ -376,12 +479,9 @@
        (fill g Color/BLACK 0 0 w h)
        (text g (font Font/BOLD 17) Color/WHITE "XDJ-AZ LINK" 16 27)
 
-       ;; The control that shows or hides the scrolling waveforms.
-       (.setColor g label-grey)
-       (if @waveforms-shown
-         (.fillPolygon g (int-array [toggle-x (+ toggle-x 10) (+ toggle-x 5)]) (int-array [17 17 25]) 3)
-         (.fillPolygon g (int-array [(+ toggle-x 1) (+ toggle-x 9) (+ toggle-x 1)]) (int-array [15 21 27]) 3))
-       (text g small label-grey "WAVEFORMS" (+ toggle-x 17) 26)
+       ;; The controls that show or hide the scrolling waveforms and the players.
+       (paint-toggle g small toggle-x @waveforms-shown "WAVEFORMS")
+       (paint-toggle g small (+ toggle-end 8) @players-shown "PLAYERS")
        (let [right (- w 16)
              right (if link-bpm
                      (status link-green
@@ -411,7 +511,8 @@
   "Builds the XDJ-AZ Link window. `quit-fn` is called when the user
   closes it. The scrolling waveforms start hidden, and are only built
   and animated while they are shown, because drawing them is what
-  keeps the computer busy."
+  keeps the computer busy. The players can be hidden as well, leaving
+  only the header."
   [quit-fn]
   (let [holders  (mapv (fn [_]  ; Each receives the whole-track waveform of its deck once we are online.
                          (seesaw/border-panel
@@ -459,6 +560,11 @@
                    (seesaw/config! scrolls :visible? shown?)
                    (fit)
                    (.repaint ^JComponent header))
+        players  (fn [shown?]
+                   (reset! players-shown shown?)
+                   (seesaw/config! panels :visible? shown?)
+                   (fit)
+                   (.repaint ^JComponent header))
         painted  (atom nil)
         timer    (Timer. 66 (reify java.awt.event.ActionListener
                               (actionPerformed [_this _event]
@@ -471,20 +577,31 @@
                                     (fit))
                                   (when (and @waveforms-shown (nil? @details))
                                     (show true)))
+                                ;; Draw the scrolling waveforms in the colors the XDJ-AZ uses.
+                                (when @waveforms-shown
+                                  (doseq [[n detail] (map vector decks @details)]
+                                    (when (instance? WaveformDetailComponent detail)
+                                      (safely #(use-three-band n detail)))))
                                 ;; Only redraw when something we show has changed.
                                 (let [now [(mapv deck-state decks) (players-visible?) (interface-count) (link-bpm)]]
                                   (when (not= now @painted)
                                     (reset! painted now)
                                     (.repaint ^JComponent header)
-                                    (doseq [^JComponent info infos]
-                                      (.repaint info)))))))]
-    (.setMinimumSize root (java.awt.Dimension. 1000 200))
+                                    (when @players-shown
+                                      (doseq [^JComponent info infos]
+                                        (.repaint info))))))))]
+    (.addAnalysisTagListener analysis-finder three-band-listener ".2EX" "PWV7")
+    (.setMinimumSize root (java.awt.Dimension. 1000 60))
     (.pack root)
     (util/restore-window-position root :lossless nil)
     (fit)
     (seesaw/listen header :mouse-pressed (fn [^java.awt.event.MouseEvent e]
-                                           (when (< (.getX e) toggle-end)
-                                             (show (not @waveforms-shown)))))
+                                           (cond
+                                             (< (.getX e) toggle-end)
+                                             (show (not @waveforms-shown))
+
+                                             (< (.getX e) players-toggle-end)
+                                             (players (not @players-shown)))))
     (seesaw/listen root
                    :window-closing (fn [_] (quit-fn))
                    :component-moved (fn [_] (util/save-window-position root :lossless))

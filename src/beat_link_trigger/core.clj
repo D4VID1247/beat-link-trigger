@@ -131,7 +131,8 @@
      ;; where users expect to find them, and add a Quit handler that
      ;; saves the state, and gives users a chance to veto losing
      ;; unsaved editor windows.
-     ;; XDJ-AZ Link has no About window and no settings, so it only installs the Quit handler.
+     ;; XDJ-AZ Link has its own small About window and no settings.
+     (lossless/install-about-handler)
      (menus/install-mac-quit-handler)
 
      ;; If we were given instructions to reset our preferences, try to do so.
