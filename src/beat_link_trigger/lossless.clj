@@ -329,14 +329,14 @@
 
        ;; The remaining time.
        (text g (font Font/BOLD 12) label-grey (if remain "REMAIN" "TIME") 16 74)
-       (let [end (text g (font Font/PLAIN 56) Color/WHITE clock 14 132)]
-         (text g (font Font/PLAIN 24) Color/WHITE millis (+ end 2) 132))
+       (let [end (text g (font Font/PLAIN 50) Color/WHITE clock 14 132)]
+         (text g (font Font/PLAIN 22) Color/WHITE millis (+ end 2) 132))
 
        ;; The tempo change, which ends just before the BPM box.
        (let [right (- box-x 18)]
          (text-right g (font Font/BOLD 12) label-grey "TEMPO" right 74)
          (let [percent-x (text-right g (font Font/PLAIN 16) Color/WHITE "%" right 132)]
-           (text-right g (font Font/PLAIN 32) Color/WHITE
+           (text-right g (font Font/PLAIN 28) Color/WHITE
                        (if pitch
                          (String/format java.util.Locale/ROOT "%+.2f" (to-array [(double pitch)]))
                          "-.--")
@@ -468,9 +468,10 @@
   what keeps the computer busy."
   [quit-fn]
   (let [holders  (mapv (fn [_]  ; Each receives the whole-track waveform of its deck once we are online.
-                         (seesaw/border-panel
+                         (seesaw/border-panel  ; Its fixed height keeps the waveform as flat as on the XDJ-AZ.
                           :background Color/BLACK
-                          :center (seesaw/canvas :background Color/BLACK :preferred-size [400 :by 60])))
+                          :preferred-size [400 :by 64]
+                          :center (seesaw/canvas :background Color/BLACK)))
                        decks)
         previews (atom nil)
         header   (seesaw/canvas :paint paint-header :preferred-size [1100 :by 40])
