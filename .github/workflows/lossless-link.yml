@@ -12,6 +12,7 @@ env:
   app_name: LossLess Link
   app_java_modules: java.base,java.desktop,java.management,java.naming,java.prefs,java.sql,jdk.javadoc,jdk.zipfs,jdk.unsupported
   GH_TOKEN: ${{ github.token }}
+  LEIN_SNAPSHOTS_IN_RELEASE: 1
 
 jobs:
   build:
