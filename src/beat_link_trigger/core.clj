@@ -4,6 +4,7 @@
   (:require [beat-link-trigger.about :as about]
             [beat-link-trigger.help :as help]
             [beat-link-trigger.logs :as logs]
+            [beat-link-trigger.lossless :as lossless]
             [beat-link-trigger.menus :as menus]
             [beat-link-trigger.prefs :as prefs]
             [beat-link-trigger.settings :as settings]
@@ -47,7 +48,8 @@
      ;; during their previous session.
      (when-not suppress
        (show/reopen-previous-shows))
-     (show/reopen-specified-shows show))))
+     (show/reopen-specified-shows show))
+   (lossless/show-window triggers/quit)))  ; The only window LossLess Link shows.
 
 (defn- build-network-description
   "Returns a string suitable for creating a `JLabel` describing the
@@ -73,6 +75,7 @@
          searching        (atom (about/create-searching-frame continue-offline quit))
          real-player?     (triggers/real-player?)
          network-label    (seesaw/invoke-now (seesaw/label))]
+     (lossless/ensure-ethernet-only)  ; Keep DJ Link traffic off the USB cable before we start listening.
      (try
        (.start device-finder)  ; We are going to look for devices ourselves, so the user can interrupt us.
        (catch java.net.BindException e
@@ -138,13 +141,9 @@
                (timbre/info "Went online, using player number" (.getDeviceNumber virtual-cdj)
                             "and Opus Quad compatibility mode is" (.inOpusQuadCompatibilityMode virtual-cdj))
 
-               ;; Provide warnings about network topology problems
+               ;; LossLess Link reports a second network interface in its own window instead of a dialog.
                (when-let [interfaces (seq (help/list-conflicting-network-interfaces))]
-                 (seesaw/invoke-now
-                   (seesaw/alert (str "<html>Found multiple network interfaces on the DJ Link network.<br>"
-                                      "This can lead to duplicate packets and unreliable results:<br><br>"
-                                      (str/join "<br>" interfaces))
-                                 :title "Network Configuration Problem" :type :warning)))
+                 (timbre/warn "Found multiple network interfaces on the DJ Link network:" interfaces))
 
                (try
                  (when-let [unreachables (seq (.findUnreachablePlayers virtual-cdj))]
@@ -190,7 +189,7 @@
      ;; Sadly, this no longer works in current macOS versions, so we
      ;; need to continue to rely on the bundle descriptor, and lack
      ;; a valid name when running in development or as a loose jar.
-     (System/setProperty "apple.awt.application.name" "Beat Link Trigger")
+     (System/setProperty "apple.awt.application.name" "LossLess Link")
 
      ;; Allow dark title bars. This is supposed to be back-ported to Java 11.0.8,
      ;; but it is not yet working either.

@@ -195,9 +195,7 @@
   [parent]
   (let [^JFrame our-frame @carabiner-window]
     (util/restore-window-position our-frame :carabiner parent)
-    (seesaw/show! our-frame)
-    (.toFront our-frame)
-    our-frame))
+    our-frame))  ; LossLess Link keeps this window hidden; its own window shows the Link state.
 
 (defn- connect-choice
   "Respond to the user changing the state of the Connect checkbox."

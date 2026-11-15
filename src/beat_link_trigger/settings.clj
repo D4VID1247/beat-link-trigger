@@ -255,10 +255,9 @@
   goes online."
   [trigger-frame expression-globals]
   (let [preferences (prefs/get-preferences)]
-    (when (:show-player-status preferences)
-      (players/show-window trigger-frame expression-globals))
-
-    (let [mode (-> (:carabiner-startup-mode preferences "Off")
+    ;; LossLess Link never opens the Player Status window, and always syncs Ableton Link
+    ;; to the players (Passive mode, aligned at the bar level) unless the stored settings say otherwise.
+    (let [mode (-> (:carabiner-startup-mode preferences "Passive")
                    str/lower-case
                    keyword
                    sanitize-startup-mode)]
@@ -268,8 +267,8 @@
           (try
             (carabiner/sync-mode mode)
             (when (#{:passive :full} mode)
-              (carabiner/sync-link (:carabiner-sync-link preferences))
-              (carabiner/align-bars (:carabiner-align-bar preferences)))
+              (carabiner/sync-link (:carabiner-sync-link preferences true))
+              (carabiner/align-bars (:carabiner-align-bar preferences true)))
             (catch Exception e
               (timbre/error e "Carabiner sync from preferences failed.")
               (seesaw/alert carabiner-frame (str "Unable to enter Carabiner sync mode chosen in Settings.\n"
