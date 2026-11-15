@@ -131,8 +131,23 @@
 
 ;;; Gathering what we show
 
-(defn- deck-state
-  "Collects what we know about a deck right now."
+(def ^:private demo?
+  "When the LOSSLESS_LINK_DEMO environment variable is set, the window
+  shows made-up deck values, so its layout can be checked without an
+  XDJ-AZ on the network."
+  (some? (System/getenv "LOSSLESS_LINK_DEMO")))
+
+(defn- demo-state
+  "Made-up values for a deck, used to check the layout."
+  [n]
+  (if (= n 1)
+    {:title "Deeper Love" :artist "Adriatique" :played 249094 :remain 136094 :pitch -1.92 :bpm 117.7
+     :master? false}
+    {:title "Illumination" :artist "DJ Koze" :played 204530 :remain 82686 :pitch 2.04 :bpm 122.5
+     :master? true}))
+
+(defn- live-state
+  "Collects what the players report about a deck right now."
   [n]
   (when (util/online?)
     (let [n                      (int n)
@@ -150,6 +165,11 @@
        :pitch   (when update (org.deepsymmetry.beatlink.Util/pitchToPercentage (.getPitch update)))
        :bpm     (when (and update (not= 65535 (.getBpm update))) (.getEffectiveTempo update))
        :master? (boolean (when update (.isTempoMaster update)))})))
+
+(defn- deck-state
+  "Collects what we show about a deck right now."
+  [n]
+  (if demo? (demo-state n) (live-state n)))
 
 (defn- interface-count
   "Counts the network interfaces through which the XDJ-AZ is seen."

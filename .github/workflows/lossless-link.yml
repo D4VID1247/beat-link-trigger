@@ -64,7 +64,7 @@ jobs:
                  --description "PRO DJ LINK vers Ableton Link pour XDJ-AZ" \
                  --mac-package-identifier "ch.lossless.link" --app-version "$version" 2>&1 | tee -a "$RUNNER_TEMP/build.log"
         mv "$app_name-$version.dmg" "LossLess-Link-$version-Intel.dmg"
-        gh release create "build-${{ github.run_number }}" "LossLess-Link-$version-Intel.dmg" \
+        gh release create "build-${{ github.run_number }}" "LossLess-Link-$version-Intel.dmg" Input/lossless-link.jar \
            --target "${{ github.sha }}" --title "LossLess Link $version" \
            --notes "Version de test pour Mac Intel. Premier lancement : clic droit sur l'appli, puis Ouvrir."
 
